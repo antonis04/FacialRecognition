@@ -52,4 +52,4 @@ Projekt realizuje zadanie klasyfikacji płci na podstawie zdjęć twarzy. Wykorz
     Po uruchomieniu otwórz przeglądarkę na http://localhost:8501.
 
 ## Autor
-[GitHub](antonis04)
+[GitHub] http://github.com/antonis04
