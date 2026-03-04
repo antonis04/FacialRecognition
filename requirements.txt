@@ -1,0 +1,10 @@
+numpy<2
+pandas
+scikit-learn
+matplotlib
+tqdm
+opencv-python<4.10
+tensorflow-macos
+tensorflow-metal
+mtcnn
+gradio
