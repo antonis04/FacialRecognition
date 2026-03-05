@@ -1,6 +1,5 @@
 import sys
 import os
-# Dodajemy główny katalog projektu do ścieżki Pythona, aby importy z src działały
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import pandas as pd
@@ -9,110 +8,109 @@ import tensorflow as tf
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 
 from src.model import create_multimodal_model
 from src.features import FEATURE_NAMES
 
-# 1. Wczytanie danych z pliku CSV
 df = pd.read_csv('data/labels_with_features.csv')
-X_img_paths = df['filename'].values          # ścieżki względne (np. "female/zdjecie.jpg")
-y = df['label'].values                        # etykiety (0 – kobieta, 1 – mężczyzna)
-X_features = df[FEATURE_NAMES].values.astype(np.float32)  # wektory cech
+X_img_paths = df['filename'].values
+y = df['label'].values
+X_features = df[FEATURE_NAMES].values.astype(np.float32)
 
-# 2. Podział na zbiór treningowy i walidacyjny (80% / 20%)
 img_paths_train, img_paths_val, y_train, y_val, feat_train, feat_val = train_test_split(
     X_img_paths, y, X_features, test_size=0.2, random_state=42, stratify=y
 )
 
 batch_size = 16
 
-# 3. Definicja struktury danych dla generatora (output_signature)
-#    Oczekujemy dwóch wejść: (obraz, cechy) oraz jednej etykiety
+def generator(img_paths, features, labels):
+    while True:
+        indices = np.arange(len(img_paths))
+        np.random.shuffle(indices)
+        for i in range(0, len(indices), batch_size):
+            batch_idx = indices[i:i+batch_size]
+            batch_paths = img_paths[batch_idx]
+            batch_features = features[batch_idx]
+            batch_labels = labels[batch_idx]
+
+            images = []
+            for path in batch_paths:
+                full_path = os.path.join('data/processed', path)
+                img = load_img(full_path, target_size=(224, 224))
+                img = img_to_array(img) / 255.0
+                images.append(img)
+
+            # UWAGA: zwracamy krotkę ( (obraz, cechy), etykiety )
+            yield (np.array(images), np.array(batch_features)), np.array(batch_labels)
+
 output_signature = (
-    (tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),   # batch obrazów
-     tf.TensorSpec(shape=(None, len(FEATURE_NAMES)), dtype=tf.float32)),  # batch cech
-    tf.TensorSpec(shape=(None,), dtype=tf.float32)                  # batch etykiet
+    (tf.TensorSpec(shape=(None, 224, 224, 3), dtype=tf.float32),
+     tf.TensorSpec(shape=(None, len(FEATURE_NAMES)), dtype=tf.float32)),
+    tf.TensorSpec(shape=(None,), dtype=tf.float32)
 )
 
-def create_dataset(img_paths, features, labels, batch_size, shuffle=True):
-    """
-    Tworzy nieskończony dataset tf.data z podanych ścieżek, cech i etykiet.
-    """
-    def gen():
-        while True:
-            indices = np.arange(len(img_paths))
-            if shuffle:
-                np.random.shuffle(indices)
-            for i in range(0, len(indices), batch_size):
-                batch_indices = indices[i:i + batch_size]
-                batch_paths = img_paths[batch_indices]
-                batch_features = features[batch_indices]
-                batch_labels = labels[batch_indices]
+train_dataset = tf.data.Dataset.from_generator(
+    lambda: generator(img_paths_train, feat_train, y_train),
+    output_signature=output_signature
+).prefetch(tf.data.AUTOTUNE)
 
-                images = []
-                for path in batch_paths:
-                    # Uzupełniamy pełną ścieżkę do katalogu processed
-                    full_path = os.path.join('data/processed', path)
-                    img = load_img(full_path, target_size=(224, 224))
-                    img = img_to_array(img) / 255.0
-                    images.append(img)
+val_dataset = tf.data.Dataset.from_generator(
+    lambda: generator(img_paths_val, feat_val, y_val),
+    output_signature=output_signature
+).prefetch(tf.data.AUTOTUNE)
 
-                yield (np.array(images), np.array(batch_features)), np.array(batch_labels)
+steps_per_epoch = len(img_paths_train) // batch_size
+validation_steps = len(img_paths_val) // batch_size
 
-    dataset = tf.data.Dataset.from_generator(gen, output_signature=output_signature)
-    dataset = dataset.prefetch(tf.data.AUTOTUNE)
-    return dataset
-
-# 4. Tworzymy zbiory danych
-train_dataset = create_dataset(img_paths_train, feat_train, y_train, batch_size, shuffle=True)
-val_dataset = create_dataset(img_paths_val, feat_val, y_val, batch_size, shuffle=False)
-
-# 5. Tworzenie modelu
 model = create_multimodal_model()
-model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
 
-# 6. Liczba kroków na epokę – zaokrąglamy w górę, aby przetworzyć wszystkie próbki
-steps_per_epoch = (len(img_paths_train) + batch_size - 1) // batch_size
-validation_steps = (len(img_paths_val) + batch_size - 1) // batch_size
+callbacks_phase1 = [
+    EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
+    ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-7),
+    ModelCheckpoint('models/best_model_phase1.h5', monitor='val_accuracy', save_best_only=True)
+]
 
-# 7. Trenowanie modelu (30 epok)
-history = model.fit(
+history1 = model.fit(
     train_dataset,
     steps_per_epoch=steps_per_epoch,
     epochs=30,
     validation_data=val_dataset,
-    validation_steps=validation_steps
+    validation_steps=validation_steps,
+    callbacks=callbacks_phase1
 )
 
-# 8. Wizualizacja procesu uczenia
-plt.figure(figsize=(12, 5))
+# fine-tuning
+model.base_model.trainable = True
+for layer in model.base_model.layers[:100]:
+    layer.trainable = False
+for layer in model.base_model.layers[100:]:
+    layer.trainable = True
 
-plt.subplot(1, 2, 1)
-plt.plot(history.history['loss'], label='trening')
-plt.plot(history.history['val_loss'], label='walidacja')
-plt.title('Strata w kolejnych epokach')
-plt.xlabel('Epoka')
-plt.ylabel('Strata')
-plt.legend()
+model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
 
-plt.subplot(1, 2, 2)
-plt.plot(history.history['accuracy'], label='trening')
-plt.plot(history.history['val_accuracy'], label='walidacja')
-plt.title('Dokładność w kolejnych epokach')
-plt.xlabel('Epoka')
-plt.ylabel('Dokładność')
-plt.legend()
+callbacks_phase2 = [
+    EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True),
+    ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=5, min_lr=1e-7),
+    ModelCheckpoint('models/best_model_final.h5', monitor='val_accuracy', save_best_only=True)
+]
 
-plt.tight_layout()
-plt.show()
+history2 = model.fit(
+    train_dataset,
+    steps_per_epoch=steps_per_epoch,
+    epochs=20,
+    validation_data=val_dataset,
+    validation_steps=validation_steps,
+    callbacks=callbacks_phase2
+)
 
-# 9. Ewaluacja na zbiorze walidacyjnym
-print("\nOcena na zbiorze walidacyjnym:")
+model.load_weights('models/best_model_final.h5')
 val_loss, val_acc = model.evaluate(val_dataset, steps=validation_steps)
-print(f"Loss walidacyjny: {val_loss:.4f}")
-print(f"Dokładność walidacyjna: {val_acc:.4f}")
+print(f"Wyniki: loss={val_loss:.4f}, acc={val_acc:.4f}")
 
-# 10. Zapis wytrenowanego modelu
-os.makedirs('models', exist_ok=True)
 model.save('models/gender_model_multimodal.h5')
-print("Model zapisany w 'models/gender_model_multimodal.h5'")

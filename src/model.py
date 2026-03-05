@@ -28,4 +28,5 @@ def create_multimodal_model(input_shape=(224, 224, 3), num_features=len(FEATURE_
     output = Dense(1, activation='sigmoid', name='output')(z)
 
     model = Model(inputs=[image_input, feature_input], outputs=output)
+    model.base_model = base_model
     return model
