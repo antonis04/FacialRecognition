@@ -41,7 +41,6 @@ def generator(img_paths, features, labels):
                 img = img_to_array(img) / 255.0
                 images.append(img)
 
-            # UWAGA: zwracamy krotkę ( (obraz, cechy), etykiety )
             yield (np.array(images), np.array(batch_features)), np.array(batch_labels)
 
 output_signature = (
@@ -83,7 +82,6 @@ history1 = model.fit(
     callbacks=callbacks_phase1
 )
 
-# fine-tuning
 model.base_model.trainable = True
 for layer in model.base_model.layers[:100]:
     layer.trainable = False
