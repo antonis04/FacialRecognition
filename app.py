@@ -18,4 +18,4 @@ with gr.Blocks(title="Rozpoznawanie płci") as demo:
     submit_btn.click(fn=predict, inputs=image_input, outputs=output_text)
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(share=True)
